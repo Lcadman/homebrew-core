@@ -3,10 +3,9 @@ class GraphTool < Formula
 
   desc "Efficient network analysis for Python 3"
   homepage "https://graph-tool.skewed.de/"
-  url "https://downloads.skewed.de/graph-tool/graph-tool-2.98.tar.bz2"
-  sha256 "eef1948b937f5f043749eee75fe0c6d7e8f036551d945e9d55e37870b06cc527"
+  url "https://downloads.skewed.de/graph-tool/graph-tool-3.7.tar.bz2"
+  sha256 "a04ba99fc8745f440fc77dbaca07da4d05cd8d4a96e6aafabdf5c57e3809867d"
   license "LGPL-3.0-or-later"
-  revision 5
 
   livecheck do
     url "https://downloads.skewed.de/graph-tool/"
@@ -23,7 +22,6 @@ class GraphTool < Formula
   end
 
   depends_on "cgal" => :build
-  depends_on "google-sparsehash" => :build # TODO: Remove in 3.x
   depends_on "pkgconf" => :build
   depends_on "py3cairo" => [:build, :test]
   depends_on "python-setuptools" => :build # for zstandard
@@ -45,9 +43,24 @@ class GraphTool < Formula
   uses_from_macos "expat"
 
   on_macos do
+    depends_on "llvm" => :build if DevelopmentTools.clang_build_version <= 2100
     depends_on "cairo"
     depends_on "libomp"
     depends_on "libsigc++"
+  end
+
+  on_linux do
+    depends_on "gcc"
+  end
+
+  fails_with :clang do
+    build 2100
+    cause "needs C++23"
+  end
+
+  fails_with :gcc do
+    version "14"
+    cause "needs C++23"
   end
 
   pypi_packages package_name:   "",
@@ -60,19 +73,7 @@ class GraphTool < Formula
 
   def python3 = "python3.14"
 
-  # remove obsolete pointer_traits workaround for older libstdc++
-  patch :DATA
-
   def install
-    # Work around superenv to avoid mixing `expat` usage in libraries across dependency tree.
-    # Brew `expat` usage in Python has low impact as it isn't loaded unless pyexpat is used.
-    # TODO: Consider adding a DSL for this or change how we handle Python's `expat` dependency
-    if OS.mac? && MacOS.version < :sequoia
-      env_vars = %w[CMAKE_PREFIX_PATH HOMEBREW_INCLUDE_PATHS HOMEBREW_LIBRARY_PATHS PATH PKG_CONFIG_PATH]
-      ENV.remove env_vars, /(^|:)#{Regexp.escape(formula_opt_prefix("expat"))}[^:]*/
-      ENV.remove "HOMEBREW_DEPENDENCIES", "expat"
-    end
-
     venv = virtualenv_create(libexec, python3)
     resource("zstandard").stage do
       args = ["--config-settings=--build-option=--system-zstd"]
@@ -85,9 +86,13 @@ class GraphTool < Formula
       ENV.append "LDFLAGS", "-L#{formula_opt_lib("libomp")} -lomp"
       ENV.append "CPPFLAGS", "-I#{formula_opt_include("libomp")}"
     else
-      # Linux build is not thread-safe.
+      # Linux build frequently hits OOM killer as runner lacks swap memory
       ENV.deparallelize
     end
+
+    # Upstream benchmarks show up to 12x improvement from -O2 to -O3:
+    # https://git.skewed.de/count0/graph-tool/-/blob/release-3.7/configure.ac#L67-69
+    ENV.O3
 
     args = %W[
       PYTHON=#{which(python3)}
@@ -126,30 +131,3 @@ class GraphTool < Formula
     refute_match "drawing will not work", shell_output("#{python3} test.py 2>&1")
   end
 end
-
-__END__
-diff --git a/src/boost-workaround/boost/container/vector_old.hpp b/src/boost-workaround/boost/container/vector_old.hpp
-index c4152c8..f72e646 100644
---- a/src/boost-workaround/boost/container/vector_old.hpp
-+++ b/src/boost-workaround/boost/container/vector_old.hpp
-@@ -3167,20 +3167,6 @@ struct has_trivial_destructor_after_move<boost::container::vector<T, Allocator,
-
- }
-
--//See comments on vec_iterator::element_type to know why is this needed
--#ifdef BOOST_GNU_STDLIB
--
--BOOST_MOVE_STD_NS_BEG
--
--template <class Pointer, bool IsConst>
--struct pointer_traits< boost::container::vec_iterator<Pointer, IsConst> >
--   : public boost::intrusive::pointer_traits< boost::container::vec_iterator<Pointer, IsConst> >
--{};
--
--BOOST_MOVE_STD_NS_END
--
--#endif   //BOOST_GNU_STDLIB
--
- #endif   //#ifndef BOOST_CONTAINER_DOXYGEN_INVOKED
-
- #include <boost/container/detail/config_end.hpp>
